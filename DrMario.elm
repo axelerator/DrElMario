@@ -17,7 +17,10 @@ type alias Item =
   }
 
 type alias Field = (Int, Int)
+type alias Fields = List Field
+
 type alias ColoredField = (Field, ItemColor)
+type alias ColoredFields = List ColoredField
 
 type ItemColor = Blue | Yellow | Red
 
@@ -46,7 +49,6 @@ toCol c =
     Red -> rgba 111 11 11 0.6
     Blue -> rgba 11 11 111 0.6
     Yellow -> rgba 11 111 11 0.6
-
 
 geo : Item -> Form
 geo item =
@@ -170,8 +172,6 @@ addOrNewGroup (key, x) groups  = case groups of
                           (lastKey, x::vs)::xs
                        else
                           (key, [x])::(lastKey, vs)::xs
-  
-
 
 groupBy : (a -> comparable) -> List a -> List (comparable, List a)
 groupBy f xs =
@@ -180,6 +180,55 @@ groupBy f xs =
     zipped = List.sortBy fst (List.map2 (,) keys xs)
   in
     List.foldr addOrNewGroup [] zipped
+
+areNeighbours : Orientation -> ColoredField -> ColoredField -> Bool
+areNeighbours o ((x0, y0),_) ((x1, y1),_) = 
+  case o of
+    Vertical   -> y0 == y1 + 1 || y0 == y1 - 1
+    Horizontal -> x0 == x1 + 1 || x0 == x1 - 1
+
+sameColor : ColoredField -> ColoredField -> Bool
+sameColor (_, c0) (_, c1) = c0 == c1
+
+belongsToCluster : Orientation -> ColoredFields -> ColoredField -> Bool
+belongsToCluster o others field =
+  case others of
+    [] -> False
+    x::xs -> (sameColor x field) && (areNeighbours o x field)
+
+addOrNewCluster : Orientation -> ColoredField -> List ColoredFields -> List ColoredFields
+addOrNewCluster o current clusters =
+  case clusters of
+    [] -> [[current]]
+    last::rest -> if belongsToCluster o last current then
+                    (current::last)::rest
+                  else
+                    [current]::clusters
+
+ignoreColor : ColoredField -> Field
+ignoreColor (pos, _) = pos
+
+dropTooShort : List ColoredFields -> List ColoredFields
+dropTooShort = List.filter (\l -> List.length l > 2)
+
+findClusters : ColoredFields -> Orientation -> Fields
+findClusters coloredFields orientation =
+  let
+    sortDir = case orientation of
+      Vertical   -> \((x,y), _) -> y
+      Horizontal -> \((x,y), _) -> x
+    groupDir = case orientation of
+      Vertical   -> \((x,y), _) -> x
+      Horizontal -> \((x,y), _) -> y
+    byOrientation = List.map snd (groupBy groupDir coloredFields)
+    byOrientationSorted = List.map (List.sortBy sortDir) byOrientation
+    clusterFolder = addOrNewCluster orientation
+    foldGroup = List.foldr clusterFolder []
+    clustersPerLine = List.map foldGroup byOrientationSorted
+    longClustersPerLine = List.map dropTooShort clustersPerLine
+    forAllLines = List.concat (List.concat longClustersPerLine)
+   in
+     List.map ignoreColor forAllLines
 
 cluster : (a -> comparable) -> List a -> List (comparable, List a)
 cluster f xs =
@@ -194,7 +243,7 @@ colorToInt col = case col of
   Yellow -> 1
   Red -> 2
   
-findMatchesInOrderedFields : List ColoredField -> List ColoredField
+findMatchesInOrderedFields : ColoredFields -> ColoredFields
 findMatchesInOrderedFields fields =
   let 
     byColor = groupBy (snd >> colorToInt) fields
@@ -202,32 +251,62 @@ findMatchesInOrderedFields fields =
   in
     List.concat (List.filter (\fs -> (List.length fs) > 3) withoutKey)
 
+leftMatch : Item -> Fields -> Bool
+leftMatch item ((fx, fy)::_) = item.x /= fx || item.y /= fy
 
-isInFields : List Field -> Item -> Bool
+splitI : Item -> Items
+splitI item = case item.kind of
+  Virus _ -> [item]
+  HalfPill _ -> [item]
+  FullPill left right -> case item.o of
+    Horizontal -> [ { item | kind <- HalfPill left}
+                  , { item | kind <- HalfPill right, x <- item.x + 1}
+                  ]
+    Vertical   -> [ { item | kind <- HalfPill left}
+                  , { item | kind <- HalfPill right, y <- item.y + 1}
+                  ]
+
+split : Item -> Fields -> Item
+split item fields = 
+  let
+    (leftHalf::rightHalf::[]) = splitI item
+  in
+    if leftMatch item fields then
+      leftHalf 
+    else
+      rightHalf
+      
+
+isInFields : Fields -> Item -> Items
 isInFields fields item =
   let
     itemFields = takenFields item
     containedInFields f = List.any (isSameField f) fields
+    matches = List.filter containedInFields itemFields
+    matchesAny = (List.length matches) > 0
   in
-    List.any (\b -> b) (List.map containedInFields itemFields)
+    if matchesAny then
+      case item.kind of
+        Virus _ -> []
+        HalfPill _ -> []
+        FullPill _ _ -> if (List.length matches) == 2 then
+                          []
+                        else
+                          [split item matches]
+    else
+      [item]
+
+      
 
 clearMatches : Items -> Items
 clearMatches items =
   let
-    xMax = (List.maximum << (List.map .x)) items
-    yMax = (List.maximum << (List.map .y)) items
-    allColoredFields = (List.concat << List.map coloredFields) items
-    getRow ((x,y), _) = y
-    getCol ((x,y), _) = x
-    byRow = List.map snd (cluster getRow allColoredFields)
-    byCol = List.map snd (cluster getCol allColoredFields)
-    rowMatches = List.concat (List.map findMatchesInOrderedFields byRow)
-    colMatches = List.concat (List.map findMatchesInOrderedFields byCol)
-    allMatches = List.map fst (List.concat [rowMatches, colMatches])
-    dropIfMatch item notDropped = if isInFields allMatches item then
-                                    notDropped
-                                  else
-                                    item::notDropped
+    allTakenFields = List.concat (List.map coloredFields items)
+    allHorizontalMatches = findClusters allTakenFields Horizontal
+    allVerticalMatches = findClusters allTakenFields Vertical
+    allMatches = List.concat [allHorizontalMatches, allVerticalMatches]
+    --allMatches = allHorizontalMatches
+    dropIfMatch item notDropped = List.concat [(isInFields allMatches item), notDropped]
   in
     List.foldr dropIfMatch [] items
 
@@ -308,12 +387,18 @@ blocks (x,y) item =
 input : Signal (Float, Keys)
 input =
   let
-    delta = Signal.map (\t -> t/20) (fps 10)
+    delta = Signal.map (\t -> t/20) (fps 20)
   in
     Signal.sampleOn delta (Signal.map2 (,) delta Keyboard.arrows)
     
 view : (Int, Int) -> Board -> Element
-view (w', h') board = collage w' h' (List.map geo board.items)
+view (w', h') board =
+ let
+   bgScale = 2
+   bg = toForm (image (79*bgScale) (175*bgScale) "/bg.jpg") |> move (0, (175*(bgScale/2))) 
+   forms = bg::(List.map geo board.items)
+ in
+   collage w' h' forms
 
 
 stone1 =
@@ -326,15 +411,15 @@ stone1 =
 
 stone2 =
   { x = 5
-  , y = 5
+  , y = 1
   , kind = Virus Red
-  , o = Vertical
+  , o = Horizontal
   , hover = defaultHover
   }
 
 
 board = 
-  { items = [stone1, stone2]
+  { items = splitI stone2
   , seed = Random.initialSeed 31415
   }
   
