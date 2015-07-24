@@ -39,20 +39,31 @@ type alias Board =
   , seed: Random.Seed
   }
 
-fieldWidth05 = 10
-fieldWidth = 20
+globalScale = 3
+fieldWidth05 = 4 * globalScale
+fieldWidth = 7 * globalScale
+jarHeight = 10
+jarHeight05 = 5
+jarWidth = 9
+jarWidth05 = 4
+
 defaultHover = 10.0
 
 toCol : ItemColor -> Color
 toCol c =
   case c of
-    Red -> rgba 111 11 11 0.6
-    Blue -> rgba 11 11 111 0.6
-    Yellow -> rgba 11 111 11 0.6
+    Red -> rgba 111 11 11 1.0
+    Blue -> rgba 11 11 111 1.0
+    Yellow -> rgba 11 111 11 1.0
 
 geo : Item -> Form
 geo item =
   let
+    (width, height) = 
+      case item.kind of
+        Virus _ -> (fieldWidth, fieldWidth)
+        HalfPill _ -> (fieldWidth, fieldWidth)
+        FullPill _ _ -> (fieldWidth * 2, fieldWidth)
     (ox, oy) = 
       case item.kind of
         Virus _ -> (fieldWidth05, fieldWidth05)
@@ -60,37 +71,32 @@ geo item =
         FullPill _ _ -> case item.o of
                           Horizontal -> (fieldWidth, fieldWidth05)
                           Vertical -> (fieldWidth05, fieldWidth)
-    pos = (item.x * 20 + ox, item.y * 20 + oy)
-    res = case item.kind of
-      Virus itemColor -> circle (fieldWidth * 0.5)
-                          |> filled (toCol itemColor)
-      HalfPill itemColor -> rect fieldWidth fieldWidth
-                          |> filled (toCol itemColor)
-      FullPill c1 c2 -> case item.o of
-                          Horizontal -> toForm
-                                          (collage (2 * fieldWidth) fieldWidth [
-                                            rect fieldWidth fieldWidth
-                                              |> filled (toCol c1)
-                                              |> move (fieldWidth * -0.5, 0)
-                                            ,
-                                            rect fieldWidth fieldWidth
-                                              |> filled (toCol c2)
-                                              |> move (fieldWidth * 0.5, 0)
-                                            ])
-                          Vertical -> toForm
-                                          (collage fieldWidth (2 * fieldWidth) [
-                                            rect fieldWidth fieldWidth
-                                              |> filled (toCol c1)
-                                              |> move (0, fieldWidth * -0.5)
-                                            ,
-                                            rect fieldWidth fieldWidth
-                                              |> filled (toCol c2)
-                                              |> move (0, fieldWidth * 0.5)
-                                            ])
+    pos = (toFloat ((item.x - jarWidth05) * fieldWidth + ox - fieldWidth05), toFloat((item.y - jarHeight05 - 1 ) * fieldWidth + oy + fieldWidth))
   in
-    res 
-      |> move pos
+    case item.o of
+      Horizontal ->
+        toForm (image (width) (height) (pillImage item.kind)) 
+          |> move pos 
+      Vertical ->
+        toForm (image (width) (height) (pillImage item.kind)) 
+          |> move pos |> rotate (3.14 * 0.5)
 
+pillImage kind = case kind of
+  Virus Red -> "vr.jpg"
+  Virus Blue -> "vb.jpg"
+  Virus Yellow -> "vb.jpg"
+  HalfPill Red -> "hpr.jpg"
+  HalfPill Blue -> "hpb.jpg"
+  HalfPill Yellow -> "hpy.jpg"
+  FullPill Red Red -> "fprr.jpg"
+  FullPill Red Blue -> "fprb.jpg"
+  FullPill Red Yellow -> "fpry.jpg"
+  FullPill Blue Red -> "fpbr.jpg"
+  FullPill Blue Blue -> "fpbb.jpg"
+  FullPill Blue Yellow -> "fpby.jpg"
+  FullPill Yellow Red -> "fpyr.jpg"
+  FullPill Yellow Blue -> "fpyb.jpg"
+  FullPill Yellow Yellow -> "fpyy.jpg"
 
 
 gravity items dt item =
@@ -141,9 +147,17 @@ interact cmd item =
   case cmd of
     StrafeLeft -> { item | x <- item.x - 1 }
     StrafeRight -> { item | x <- item.x + 1 }
-    RotLeft -> { item | o <- if item.o == Vertical then Horizontal else Vertical}
-    RotRight -> { item | o <- if item.o == Vertical then Horizontal else Vertical}
+    RotLeft -> case item.o of
+      Horizontal -> { item | o <- Vertical, kind <- (swapColors item.kind)}
+      Vertical -> { item | o <- Horizontal}
+    RotRight -> case item.o of
+      Horizontal -> { item | o <- Vertical}
+      Vertical -> { item | o <- Horizontal, kind <- (swapColors item.kind)}
     None -> item
+
+swapColors : ItemType -> ItemType
+swapColors itemKind = case itemKind of
+  FullPill left right -> FullPill right left
 
 coloredFields : Item -> List ColoredField
 coloredFields item = 
@@ -318,7 +332,7 @@ update (dt, keys) board =
     (newCol0, colorSeed2) = nextColor colorSeed
     (newCol1, lastSeed) = nextColor colorSeed2
     stone =
-      { x = 0 --newPos
+      { x = 2 --newPos
       , y = 15
       , kind = FullPill newCol0 newCol1
       , o = Horizontal
@@ -368,8 +382,10 @@ isFree field items =
     occupiedFields = List.concat (List.map takenFields items )
     blockedByOther = List.any (isSameField field) occupiedFields
     isAtBottom = y == -1
+    isAtLeftBorder = x == -1
+    isAtRightBorder = x == jarWidth
   in
-    not (blockedByOther || isAtBottom)
+    not (blockedByOther || isAtBottom || isAtLeftBorder || isAtRightBorder)
 
 blocks : Field -> Item -> Bool
 blocks (x,y) item =
@@ -394,8 +410,7 @@ input =
 view : (Int, Int) -> Board -> Element
 view (w', h') board =
  let
-   bgScale = 2
-   bg = toForm (image (79*bgScale) (175*bgScale) "/bg.jpg") |> move (0, (175*(bgScale/2))) 
+   bg = toForm (image (79*globalScale) (175*globalScale) "/bg.jpg") |> move (0, 44 * globalScale) 
    forms = bg::(List.map geo board.items)
  in
    collage w' h' forms
